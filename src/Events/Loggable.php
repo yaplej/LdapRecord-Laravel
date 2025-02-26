@@ -8,21 +8,17 @@ trait Loggable
 {
     /**
      * Get the level of log message (i.e. info, alert, critical).
-     *
-     * @return mixed
      */
-    public function getLogLevel()
+    public function getLogLevel(): string
     {
-        return 'info';
+        return Config::get('ldap.logging.level', 'info');
     }
 
     /**
      * Determine if event should be logged.
-     *
-     * @return bool
      */
-    public function shouldLogEvent()
+    public function shouldLogEvent(): bool
     {
-        return Config::get('ldap.logging', false);
+        return Config::get('ldap.logging.enabled', false);
     }
 }

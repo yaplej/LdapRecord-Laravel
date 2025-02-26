@@ -5,10 +5,13 @@ namespace LdapRecord\Laravel\Tests\Feature\Emulator;
 use LdapRecord\Connection;
 use LdapRecord\Container;
 use LdapRecord\Laravel\Testing\DirectoryEmulator;
+use LdapRecord\Laravel\Testing\LdapObject;
 use LdapRecord\Laravel\Tests\TestCase;
 use LdapRecord\Models\ActiveDirectory\Group;
+use LdapRecord\Models\ActiveDirectory\OrganizationalUnit;
 use LdapRecord\Models\ActiveDirectory\User;
 use LdapRecord\Models\Entry;
+use LdapRecord\Models\Relations\HasManyIn;
 use Ramsey\Uuid\Uuid;
 
 class EmulatedModelQueryTest extends TestCase
@@ -45,8 +48,27 @@ class EmulatedModelQueryTest extends TestCase
         $this->assertNull(TestModelStub::find($dn));
 
         $user = TestModelStub::create(['cn' => 'John Doe']);
+
         TestModelStub::create(['cn' => 'Jane Doe']);
+
         $this->assertTrue($user->is(TestModelStub::find($dn)));
+    }
+
+    public function test_find_with_custom_connection()
+    {
+        Container::addConnection(new Connection([
+            'base_dn' => 'dc=foo,dc=com',
+        ]), 'foo');
+
+        DirectoryEmulator::setup('foo');
+
+        $dn = 'cn=John Doe,dc=foo,dc=com';
+
+        $this->assertNull(TestModelStubWithFooConnection::find($dn));
+
+        $user = TestModelStubWithFooConnection::create(['cn' => 'John Doe']);
+
+        $this->assertTrue($user->is(TestModelStubWithFooConnection::find($dn)));
     }
 
     public function test_find_by_guid()
@@ -80,7 +102,7 @@ class EmulatedModelQueryTest extends TestCase
         $model = TestModelStub::create(['cn' => 'John']);
         $this->assertNull($model->sn);
 
-        $model->insertAttributes($model->getDn(), ['sn' => 'Doe']);
+        $model->add($model->getDn(), ['sn' => 'Doe']);
 
         $this->assertEquals('Doe', $model->fresh()->sn[0]);
     }
@@ -104,13 +126,18 @@ class EmulatedModelQueryTest extends TestCase
             $model->save();
         });
 
-        $this->assertNull($model->delete());
+        $this->assertInstanceOf(LdapObject::class, LdapObject::firstWhere('dn', $model->getDn()));
+
+        $model->delete();
+
         $this->assertFalse($model->exists);
         $this->assertNull(TestModelStub::find($model->getDn()));
+        $this->assertNull(LdapObject::firstWhere('dn', $model->getDn()));
     }
 
     public function test_delete_attribute()
     {
+        /** @var TestModelStub $model */
         $model = tap(new TestModelStub, function ($model) {
             $model->cn = 'John Doe';
             $model->foo = 'bar';
@@ -119,15 +146,15 @@ class EmulatedModelQueryTest extends TestCase
             $model->save();
         });
 
-        $model->deleteAttribute('foo');
-        $model->deleteAttribute(['baz', 'zal' => 'invalid']);
+        $model->removeAttribute('foo');
+        $model->removeAttributes(['baz', 'zal' => 'invalid']);
 
         $this->assertNull($model->foo);
         $this->assertNull($model->baz);
         $this->assertEquals(['ze'], $model->zal);
         $this->assertEquals('John Doe', $model->cn[0]);
 
-        $model->deleteAttribute(['baz', 'zal' => 'ze']);
+        $model->removeAttributes(['baz', 'zal' => 'ze']);
 
         $this->assertEquals([], $model->zal);
     }
@@ -145,7 +172,7 @@ class EmulatedModelQueryTest extends TestCase
         $this->assertEquals(['bar'], $model->foo);
         $this->assertEquals(['set'], $model->baz);
 
-        $model->deleteAttributes($model->getDn(), ['foo' => [], 'baz' => []]);
+        $model->remove($model->getDn(), ['foo' => [], 'baz' => []]);
 
         $model = TestModelStub::find($model->getDn());
         $this->assertNull($model->foo);
@@ -201,7 +228,8 @@ class EmulatedModelQueryTest extends TestCase
         $model = TestModelStub::create(['cn' => 'John', 'sn' => 'Doe']);
         $this->assertEquals('Doe', $model->sn[0]);
 
-        $model->updateAttributes($model->getDn(), ['sn' => []]);
+        $model->replace($model->getDn(), ['sn' => []]);
+
         $this->assertNull($model->fresh()->sn);
     }
 
@@ -257,7 +285,7 @@ class EmulatedModelQueryTest extends TestCase
 
         $model = new class extends Entry
         {
-            public static $objectClasses = ['three', 'four'];
+            public static array $objectClasses = ['three', 'four'];
         };
 
         $this->assertCount(0, $model::get());
@@ -345,8 +373,8 @@ class EmulatedModelQueryTest extends TestCase
         $this->assertCount(0, TestModelStub::whereStartsWith('cn', 'teve')->get());
 
         $models = TestModelStub::whereStartsWith('cn', 'J')
-                    ->whereStartsWith('cn', 'Ja')
-                    ->get();
+            ->whereStartsWith('cn', 'Ja')
+            ->get();
 
         $this->assertCount(1, $models);
     }
@@ -373,8 +401,8 @@ class EmulatedModelQueryTest extends TestCase
         $this->assertCount(0, TestModelStub::whereEndsWith('cn', 'oh')->get());
 
         $models = TestModelStub::whereEndsWith('cn', 'n')
-                    ->whereEndsWith('cn', 'hn')
-                    ->get();
+            ->whereEndsWith('cn', 'hn')
+            ->get();
 
         $this->assertCount(1, $models);
     }
@@ -569,7 +597,7 @@ class EmulatedModelQueryTest extends TestCase
         (new TestModelStub(['cn' => 'Jen']))->inside('ou=Accounts,ou=Users,dc=local,dc=com')->save();
 
         $this->assertCount(2, TestModelStub::in('ou=Users,dc=local,dc=com')->get());
-        $this->assertCount(1, TestModelStub::listing()->in('ou=Users,dc=local,dc=com')->get());
+        $this->assertCount(1, TestModelStub::list()->in('ou=Users,dc=local,dc=com')->get());
         $this->assertCount(4, TestModelStub::in('dc=local,dc=com')->get());
     }
 
@@ -584,10 +612,46 @@ class EmulatedModelQueryTest extends TestCase
     public function test_has_many_relationship()
     {
         $group = Group::create(['cn' => 'Accounting']);
-        $user = User::create(['cn' => 'John', 'memberof' => [$group->getDn()]]);
+        $user = User::create(['cn' => 'John']);
 
-        $this->assertSame($group, $user->groups()->attach($group));
+        $user->groups()->attach($group);
+
         $this->assertEquals($user->getDn(), $group->getFirstAttribute('member'));
+
+        $this->assertTrue($user->is($group->members()->first()));
+        $this->assertTrue($group->is($user->groups()->first()));
+
+        $this->assertTrue($user->groups()->exists($group));
+        $this->assertTrue($group->members()->exists($user));
+
+        $user->groups()->detach($group);
+        $user->removeAttribute('memberof', $group->getDn());
+
+        $this->assertFalse($user->is($group->members()->first()));
+        $this->assertFalse($group->is($user->groups()->first()));
+
+        $this->assertFalse($user->groups()->exists($group));
+        $this->assertFalse($group->members()->exists($user));
+    }
+
+    public function test_rename_has_many_relationship()
+    {
+        $group = Group::create(['cn' => 'Accounting']);
+        $user = User::create(['cn' => 'John']);
+
+        $user->groups()->attach($group);
+
+        $this->assertEquals($user->getDn(), $group->getFirstAttribute('member'));
+
+        $this->assertTrue($user->is($group->members()->first()));
+        $this->assertTrue($group->is($user->groups()->first()));
+
+        $this->assertTrue($user->groups()->exists($group));
+        $this->assertTrue($group->members()->exists($user));
+
+        $group->rename('Personnel');
+
+        $this->assertEquals("cn=Personnel,{$group->getBaseDn()}", $group->getDn());
 
         $this->assertTrue($user->is($group->members()->first()));
         $this->assertTrue($group->is($user->groups()->first()));
@@ -596,12 +660,31 @@ class EmulatedModelQueryTest extends TestCase
         $this->assertTrue($group->members()->exists($user));
     }
 
+    public function test_associate_has_many_relationship()
+    {
+        $group = Group::create(['cn' => 'Accounting']);
+        $user1 = User::create(['cn' => 'John']);
+        $user2 = User::create(['cn' => 'Jane']);
+
+        $group->members()->associate([$user1, $user2]);
+        $group->save();
+
+        $this->assertEquals(2, $group->members()->count());
+
+        $this->assertTrue($user1->groups()->exists($group));
+        $this->assertTrue($group->members()->exists($user1));
+
+        $this->assertTrue($user2->groups()->exists($group));
+        $this->assertTrue($group->members()->exists($user2));
+    }
+
     public function test_has_one_relationship()
     {
         $manager = User::create(['cn' => 'John']);
         $user = User::create(['cn' => 'Jane']);
 
-        $this->assertSame($manager, $user->manager()->attach($manager));
+        $user->manager()->attach($manager);
+
         $this->assertEquals($manager->getDn(), $user->getFirstAttribute('manager'));
         $this->assertTrue($manager->is($user->manager()->first()));
         $this->assertTrue($user->manager()->exists($manager));
@@ -629,14 +712,16 @@ class EmulatedModelQueryTest extends TestCase
 
         $alpha = new class extends Entry
         {
-            protected $connection = 'alpha';
-            public static $objectClasses = ['one', 'two'];
+            protected ?string $connection = 'alpha';
+
+            public static array $objectClasses = ['one', 'two'];
         };
 
         $bravo = new class extends Entry
         {
-            protected $connection = 'bravo';
-            public static $objectClasses = ['one', 'two'];
+            protected ?string $connection = 'bravo';
+
+            public static array $objectClasses = ['one', 'two'];
         };
 
         $alphaUser = $alpha::create(['cn' => 'John']);
@@ -648,16 +733,62 @@ class EmulatedModelQueryTest extends TestCase
         $this->assertFalse($alphaUser->is($bravo->first()));
         $this->assertFalse($bravoUser->is($alpha->first()));
     }
+
+    public function test_nested_or_filter()
+    {
+        DirectoryEmulator::setup('default');
+
+        // Create some other models to ensure they are not returned.
+        $customers = OrganizationalUnit::create(['ou' => 'Customers']);
+
+        $customer = (new OrganizationalUnit)->inside($customers);
+        $customer->fill(['ou' => 'Customer']);
+        $customer->save();
+
+        $users = (new OrganizationalUnit)->inside($customer);
+        $users->fill(['ou' => 'Users']);
+        $users->save();
+
+        $userWithMatchingAttribute = User::create([
+            'cn' => 'John',
+            'msExchRecipientTypeDetails' => [1],
+        ]);
+
+        $userWithoutAttribute = User::create([
+            'cn' => 'Jane',
+        ]);
+
+        $userWithoutMatchingAttribute = User::create([
+            'cn' => 'Bob',
+            'msExchRecipientTypeDetails' => [2],
+        ]);
+
+        $results = User::query()->orFilter(function ($query) {
+            $query->where('msExchRecipientTypeDetails', 1);
+            $query->whereNotHas('msExchRecipientTypeDetails');
+        })->get();
+
+        $this->assertCount(2, $results);
+
+        $this->assertTrue($results->contains($userWithoutAttribute));
+        $this->assertTrue($results->contains($userWithMatchingAttribute));
+        $this->assertTrue($results->doesntContain($userWithoutMatchingAttribute));
+    }
 }
 
 class TestModelStub extends Entry
 {
-    public static $objectClasses = ['one', 'two'];
+    public static array $objectClasses = ['one', 'two'];
+}
+
+class TestModelStubWithFooConnection extends TestModelStub
+{
+    protected ?string $connection = 'foo';
 }
 
 class TestHasManyInStub extends TestModelStub
 {
-    public function members()
+    public function members(): HasManyIn
     {
         return $this->hasManyIn(TestModelStub::class, 'members');
     }

@@ -2,22 +2,16 @@
 
 namespace LdapRecord\Laravel\Tests\Unit;
 
-use Illuminate\Log\LogManager;
 use LdapRecord\Connection;
 use LdapRecord\Container;
 use LdapRecord\Laravel\LdapServiceProvider;
 use LdapRecord\Laravel\Tests\TestCase;
-use LdapRecord\Query\Cache;
 
 class LdapServiceProviderTest extends TestCase
 {
     protected function getEnvironmentSetup($app)
     {
         parent::getEnvironmentSetup($app);
-
-        $_ENV['LDAP_CACHE'] = true;
-        $_ENV['LDAP_LOGGING'] = true;
-        $_ENV['LDAP_CACHE_DRIVER'] = 'array';
 
         $_ENV['LDAP_CONNECTIONS'] = 'alpha,bravo';
         $_ENV['LDAP_ALPHA_HOSTS'] = '10.0.0.1,10.0.0.2';
@@ -35,10 +29,6 @@ class LdapServiceProviderTest extends TestCase
 
     protected function tearDown(): void
     {
-        unset($_ENV['LDAP_CACHE']);
-        unset($_ENV['LDAP_LOGGING']);
-        unset($_ENV['LDAP_CACHE_DRIVER']);
-
         unset($_ENV['LDAP_CONNECTIONS']);
         unset($_ENV['LDAP_ALPHA_HOSTS']);
         unset($_ENV['LDAP_ALPHA_USERNAME']);
@@ -62,16 +52,6 @@ class LdapServiceProviderTest extends TestCase
         $this->assertFileExists(config_path('ldap.php'));
     }
 
-    public function test_logger_is_set_on_container_when_enabled()
-    {
-        $this->assertInstanceOf(LogManager::class, Container::getInstance()->getLogger());
-    }
-
-    public function test_cache_is_set_on_connection_when_enabled()
-    {
-        $this->assertInstanceOf(Cache::class, Container::getInstance()->get('default')->getCache());
-    }
-
     public function test_connections_from_environment_variables_are_setup()
     {
         tap(Container::getConnection('alpha'), function (Connection $connection) {
@@ -81,8 +61,6 @@ class LdapServiceProviderTest extends TestCase
             $this->assertEquals('dc=alpha,dc=com', $config->get('base_dn'));
             $this->assertEquals('cn=user,dc=alpha,dc=com', $config->get('username'));
             $this->assertEquals('alpha-secret', $config->get('password'));
-
-            $this->assertInstanceOf(Cache::class, $connection->getCache());
         });
 
         tap(Container::getConnection('bravo'), function (Connection $connection) {
@@ -92,8 +70,6 @@ class LdapServiceProviderTest extends TestCase
             $this->assertEquals('dc=bravo,dc=com', $config->get('base_dn'));
             $this->assertEquals('cn=user,dc=bravo,dc=com', $config->get('username'));
             $this->assertEquals('bravo-secret', $config->get('password'));
-
-            $this->assertInstanceOf(Cache::class, $connection->getCache());
         });
     }
 
@@ -142,10 +118,14 @@ class LdapServiceProviderTest extends TestCase
                     ],
                 ],
             ],
-            'logging' => true,
+            'logging' => [
+                'enabled' => false,
+                'channel' => 'stack',
+                'level' => 'info',
+            ],
             'cache' => [
-                'enabled' => true,
-                'driver' => 'array',
+                'enabled' => false,
+                'driver' => 'file',
             ],
         ], app('config')->all()['ldap']);
     }

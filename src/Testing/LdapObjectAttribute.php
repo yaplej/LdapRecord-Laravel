@@ -3,7 +3,16 @@
 namespace LdapRecord\Laravel\Testing;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
+/**
+ * @property int $id
+ * @property int $ldap_object_id
+ * @property string $name
+ * @property LdapObject $object
+ * @property \Illuminate\Database\Eloquent\Collection $values
+ */
 class LdapObjectAttribute extends Model
 {
     use ResolvesEmulatedConnection;
@@ -31,25 +40,31 @@ class LdapObjectAttribute extends Model
 
     /**
      * The "boot" method of the model.
-     *
-     * @return void
      */
-    protected static function boot()
+    protected static function boot(): void
     {
         parent::boot();
 
-        static::deleted(function ($model) {
+        static::deleting(function (self $model) {
             // Delete the attribute values when deleted.
-            $model->values()->delete();
+            $model->values()->each(
+                fn (LdapObjectAttributeValue $value) => $value->delete()
+            );
         });
     }
 
     /**
-     * The hasMany values relation.
-     *
-     * @return \Illuminate\Database\Eloquent\Relations\HasMany
+     * The object relationship.
      */
-    public function values()
+    public function object(): BelongsTo
+    {
+        return $this->belongsTo(LdapObject::class, 'ldap_object_id');
+    }
+
+    /**
+     * The values relationship.
+     */
+    public function values(): HasMany
     {
         return $this->hasMany(LdapObjectAttributeValue::class);
     }

@@ -2,8 +2,10 @@
 
 namespace LdapRecord\Laravel\Commands;
 
+use Closure;
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Config\Repository;
+use Illuminate\Database\Connection;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Event;
 use LdapRecord\Laravel\Auth\DatabaseUserProvider;
@@ -14,6 +16,7 @@ use LdapRecord\Laravel\Events\Import\DeletedMissing;
 use LdapRecord\Laravel\Events\Import\Imported;
 use LdapRecord\Laravel\Events\Import\ImportFailed;
 use LdapRecord\Laravel\Events\Import\Started;
+use LdapRecord\Laravel\Import\LdapUserImporter;
 use LdapRecord\Models\Collection;
 use LdapRecord\Models\Model;
 use Symfony\Component\Console\Helper\ProgressBar;
@@ -29,13 +32,16 @@ class ImportLdapUsers extends Command
      */
     protected $signature = 'ldap:import {provider=ldap : The authentication provider to import.}
             {user? : The specific user to import.}
-            {--f|filter= : The raw LDAP filter for limiting users imported.}
-            {--a|attributes= : Comma separated list of LDAP attributes to select. }
-            {--d|delete : Soft-delete the users model if their LDAP account is disabled.}
-            {--r|restore : Restores soft-deleted models if their LDAP account is enabled.}
-            {--c|chunk= : Use chunked based importing by specifying how many records per chunk.}
-            {--dm|delete-missing : Soft-delete all users that are missing from the import. }
-            {--no-log : Disables logging successful and unsuccessful imports.}';
+            {--filter= : A raw LDAP filter to apply to the LDAP query.}
+            {--scopes= : Comma seperated list of scopes to apply to the LDAP query.}
+            {--attributes= : Comma separated list of LDAP attributes to select.}
+            {--delete : Enable soft-deleting user models if their LDAP account is disabled.}
+            {--restore : Enable restoring soft-deleted user models if their LDAP account is enabled.}
+            {--chunk= : Enable chunked based importing by specifying how many records per chunk.}
+            {--delete-missing : Enable soft-deleting all users that are missing from the import.}
+            {--min-users : Enable requiring a of minimum number of LDAP users that must be returned to synchronize.}
+            {--no-log : Disable logging successful and unsuccessful imports.}
+            {--memory-limit= : Override the PHP memory limit for the import.}';
 
     /**
      * The description of the console command.
@@ -46,41 +52,44 @@ class ImportLdapUsers extends Command
 
     /**
      * The LDAP user import instance.
-     *
-     * @var LdapUserImporter
      */
-    protected $importer;
+    protected LdapUserImporter $importer;
 
     /**
      * The import progress bar indicator.
-     *
-     * @var ProgressBar|null
      */
-    protected $progress;
+    protected ?ProgressBar $progress;
 
     /**
      * Execute the console command.
      *
-     * @param LdapUserImporter $importer
-     * @param Repositry        $config
-     *
-     * @return void
-     *
      * @throws \LdapRecord\Models\ModelNotFoundException
      */
-    public function handle(LdapUserImporter $importer, Repository $config)
+    public function handle(LdapUserImporter $importer, Repository $config): int
     {
-        $config->set('ldap.logging', $this->isLogging());
+        if ($this->option('chunk') && $this->option('delete-missing')) {
+            $this->error("The 'chunk' and 'delete-missing' options cannot be used together.");
+
+            return static::INVALID;
+        }
+
+        $config->set('ldap.logging.enabled', $this->isLogging());
 
         /** @var \LdapRecord\Laravel\Auth\DatabaseUserProvider $provider */
         $provider = Auth::createUserProvider($providerName = $this->argument('provider'));
 
         if (is_null($provider)) {
-            return $this->error("Provider [{$providerName}] does not exist.");
+            $this->error("Authentication provider [{$providerName}] does not exist. Please check your config/auth.php file.");
+
+            return static::FAILURE;
         } elseif (! $provider instanceof UserProvider) {
-            return $this->error("Provider [{$providerName}] is not configured for LDAP authentication.");
+            $this->error("Authentication provider [{$providerName}] is not configured for LDAP authentication. Please check your config/auth.php file.");
+
+            return static::INVALID;
         } elseif (! $provider instanceof DatabaseUserProvider) {
-            return $this->error("Provider [{$providerName}] is not configured for database synchronization.");
+            $this->error("Authentication provider [{$providerName}] is not configured for database synchronization. Please check your config/auth.php file.");
+
+            return static::INVALID;
         }
 
         $this->registerEventListeners();
@@ -89,23 +98,65 @@ class ImportLdapUsers extends Command
 
         $this->applyImporterOptions($provider);
 
-        ($perChunk = $this->option('chunk'))
-            ? $this->beginChunkedImport($perChunk)
-            : $this->beginImport();
+        $import = $this->buildImportCallback($provider);
+
+        ($memoryLimit = $this->option('memory-limit'))
+                ? $this->onceWithMemoryLimit($import, $memoryLimit)
+                : $import();
+
+        return static::SUCCESS;
+    }
+
+    /**
+     * Build the import callback.
+     */
+    protected function buildImportCallback(DatabaseUserProvider $provider): Closure
+    {
+        return function () use ($provider) {
+            if ($perChunk = $this->option('chunk')) {
+                $db = $provider->createModel()->getConnection();
+
+                $this->beginChunkedImport($db, $perChunk);
+            } else {
+                $this->beginImport();
+            }
+        };
+    }
+
+    /**
+     * Execute the callback once with the given memory limit.
+     */
+    protected function onceWithMemoryLimit(Closure $callback, string $limit): void
+    {
+        $default = ini_get('memory_limit');
+
+        ini_set('memory_limit', $limit);
+
+        $callback();
+
+        ini_set('memory_limit', $default);
     }
 
     /**
      * Begin importing users into the database.
-     *
-     * @return void
      */
-    protected function beginImport()
+    protected function beginImport(): void
     {
         $loaded = $this->importer->loadObjectsFromRepository($this->argument('user'));
 
         if ($loaded->count() === 0) {
-            return $this->info('There were no users found to import.');
-        } elseif ($loaded->count() === 1) {
+            $this->info('There were no users found to import.');
+
+            return;
+        }
+
+        if (($total = $loaded->count()) < ($min = $this->option('min-users'))) {
+            $this->warn("Unable to complete import. A minimum of [$min] users has been set, while only [$total] were returned.");
+
+            return;
+        }
+
+        if ($loaded->count() === 1) {
             $this->info("Found user [{$loaded->first()->getRdn()}].");
         } else {
             $this->info("Found [{$loaded->count()}] user(s).");
@@ -118,14 +169,14 @@ class ImportLdapUsers extends Command
 
     /**
      * Begin importing users into the database by chunk.
-     *
-     * @param int $perChunk
-     *
-     * @return void
      */
-    protected function beginChunkedImport($perChunk)
+    protected function beginChunkedImport(Connection $db, int $perChunk): void
     {
         $total = 0;
+
+        if ($min = $this->option('min-users')) {
+            $db->beginTransaction();
+        }
 
         $this->importer->chunkObjectsFromRepository(function (Collection $objects) use (&$total) {
             $this->info("\nChunking... Found [{$objects->count()}] user(s).");
@@ -137,6 +188,18 @@ class ImportLdapUsers extends Command
             $total = $total + $imported;
         }, $perChunk);
 
+        if ($min && $total < $min) {
+            $this->warn("Unable to complete import. A minimum of [$min] users has been set, while only [$total] were returned.");
+
+            $db->rollBack();
+
+            return;
+        }
+
+        if ($min) {
+            $db->commit();
+        }
+
         $total
             ? $this->info("\nCompleted chunked import. Successfully imported [{$total}] user(s).")
             : $this->info("\nCompleted chunked import. No users were imported.");
@@ -144,10 +207,8 @@ class ImportLdapUsers extends Command
 
     /**
      * Confirm and execute the import.
-     *
-     * @return int
      */
-    protected function confirmAndExecuteImport()
+    protected function confirmAndExecuteImport(): int
     {
         $imported = 0;
 
@@ -167,10 +228,8 @@ class ImportLdapUsers extends Command
 
     /**
      * Register the import event callbacks for the command.
-     *
-     * @return void
      */
-    protected function registerEventListeners()
+    protected function registerEventListeners(): void
     {
         Event::listen(Started::class, function (Started $event) {
             $this->progress = $this->output->createProgressBar($event->objects->count());
@@ -203,12 +262,8 @@ class ImportLdapUsers extends Command
 
     /**
      * Displays the given users in a table.
-     *
-     * @param Collection $objects
-     *
-     * @return void
      */
-    protected function confirmAndDisplayObjects(Collection $objects)
+    protected function confirmAndDisplayObjects(Collection $objects): void
     {
         if (! $this->input->isInteractive()) {
             return;
@@ -232,12 +287,8 @@ class ImportLdapUsers extends Command
 
     /**
      * Apply the import options to the importer.
-     *
-     * @param DatabaseUserProvider $provider
-     *
-     * @return void
      */
-    protected function applyImporterOptions(DatabaseUserProvider $provider)
+    protected function applyImporterOptions(DatabaseUserProvider $provider): void
     {
         $this->importer->setLdapUserRepository(
             $provider->getLdapUserRepository()
@@ -249,6 +300,10 @@ class ImportLdapUsers extends Command
 
         if ($filter = $this->option('filter')) {
             $this->importer->setLdapRawFilter($filter);
+        }
+
+        if ($scopes = $this->option('scopes')) {
+            $this->importer->setLdapScopes(explode(',', $scopes));
         }
 
         if ($attributes = $this->option('attributes')) {
@@ -270,52 +325,40 @@ class ImportLdapUsers extends Command
 
     /**
      * Set the importer to use.
-     *
-     * @param LdapUserImporter $importer
-     *
-     * @return void
      */
-    protected function setImporter(LdapUserImporter $importer)
+    protected function setImporter(LdapUserImporter $importer): void
     {
         $this->importer = $importer;
     }
 
     /**
      * Determine if logging is enabled.
-     *
-     * @return bool
      */
-    protected function isLogging()
+    protected function isLogging(): bool
     {
         return ! $this->option('no-log');
     }
 
     /**
      * Determine if soft-deleting disabled user accounts is enabled.
-     *
-     * @return bool
      */
-    protected function isDeleting()
+    protected function isDeleting(): bool
     {
         return $this->option('delete') == 'true';
     }
 
     /**
      * Determine if soft-deleting all missing users is enabled.
-     *
-     * @return bool
      */
-    protected function isDeletingMissing()
+    protected function isDeletingMissing(): bool
     {
         return $this->option('delete-missing') == 'true' && is_null($this->argument('user'));
     }
 
     /**
      * Determine if restoring re-enabled users is enabled.
-     *
-     * @return bool
      */
-    protected function isRestoring()
+    protected function isRestoring(): bool
     {
         return $this->option('restore') == 'true';
     }

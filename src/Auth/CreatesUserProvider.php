@@ -2,6 +2,7 @@
 
 namespace LdapRecord\Laravel\Auth;
 
+use Illuminate\Contracts\Auth\UserProvider;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Config;
@@ -10,26 +11,22 @@ trait CreatesUserProvider
 {
     /**
      * Attempt to retrieve the authenticated guard name.
-     *
-     * @return string|null
      */
-    protected function getCurrentAuthGuard()
+    protected function getCurrentAuthGuard(): ?string
     {
         foreach (Config::get('auth.guards') as $guard => $config) {
             if (Auth::guard($guard)->check()) {
                 return $guard;
             }
         }
+
+        return null;
     }
 
     /**
      * Get the guard's authentication user provider.
-     *
-     * @param string $guard
-     *
-     * @return \Illuminate\Contracts\Auth\UserProvider|null
      */
-    protected function getCurrentAuthProvider($guard)
+    protected function getCurrentAuthProvider(string $guard): ?UserProvider
     {
         if ($guard === 'sanctum') {
             $guard = Arr::first(

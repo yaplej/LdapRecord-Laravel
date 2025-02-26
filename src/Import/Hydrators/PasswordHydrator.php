@@ -11,43 +11,42 @@ use LdapRecord\Models\Model as LdapModel;
 class PasswordHydrator extends Hydrator
 {
     /**
-     * @inheritdoc
+     * {@inheritdoc}
      */
-    public function hydrate(LdapModel $object, EloquentModel $eloquent)
+    public function hydrate(LdapModel $object, EloquentModel $eloquent): void
     {
         if (! $this->hasPasswordColumn()) {
             return;
         }
 
-        $password = $this->password() ?? Str::random();
+        $password = $this->getPassword() ?? Str::random();
 
         if (! $this->isSyncingPasswords()) {
             $password = Str::random();
         }
 
-        if ($this->passwordNeedsUpdate($eloquent, $password)) {
-            $this->setPassword($eloquent, $password);
+        $column = method_exists($eloquent, 'getAuthPasswordName')
+            ? $eloquent->getAuthPasswordName()
+            : $this->getPasswordColumn();
+
+        if ($this->passwordNeedsUpdate($eloquent, $column, $password)) {
+            $this->setPassword($eloquent, $column, $password);
         }
     }
 
     /**
      * Set the password on the users model.
-     *
-     * @param EloquentModel $model
-     * @param string        $password
-     *
-     * @return void
      */
-    protected function setPassword(EloquentModel $model, $password)
+    protected function setPassword(EloquentModel $model, string $column, string $password): void
     {
         // If the model has a mutator for the password field, we
         // can assume hashing passwords is taken care of.
         // Otherwise, we will hash it normally.
-        $password = $model->hasSetMutator($this->passwordColumn())
+        $password = $model->hasSetMutator($column)
             ? $password
             : Hash::make($password);
 
-        $model->setAttribute($this->passwordColumn(), $password);
+        $model->setAttribute($column, $password);
     }
 
     /**
@@ -55,15 +54,10 @@ class PasswordHydrator extends Hydrator
      *
      * This checks if the model does not currently have a
      * password, or if the password fails a hash check.
-     *
-     * @param EloquentModel $model
-     * @param string|null   $password
-     *
-     * @return bool
      */
-    protected function passwordNeedsUpdate(EloquentModel $model, $password = null)
+    protected function passwordNeedsUpdate(EloquentModel $model, string $column, ?string $password = null): bool
     {
-        $current = $this->currentModelPassword($model);
+        $current = $this->getCurrentModelPassword($model, $column);
 
         // If the application is running in console, we will assume the
         // import command is being run. In this case, we do not want
@@ -84,32 +78,24 @@ class PasswordHydrator extends Hydrator
 
     /**
      * Determines if the developer has configured a password column.
-     *
-     * @return bool
      */
-    protected function hasPasswordColumn()
+    protected function hasPasswordColumn(): bool
     {
-        return $this->passwordColumn() !== false;
+        return $this->getPasswordColumn() !== false;
     }
 
     /**
      * Get the current models hashed password.
-     *
-     * @param EloquentModel $model
-     *
-     * @return string|null
      */
-    protected function currentModelPassword(EloquentModel $model)
+    protected function getCurrentModelPassword(EloquentModel $model, string $column): ?string
     {
-        return $model->getAttribute($this->passwordColumn());
+        return $model->getAttribute($column);
     }
 
     /**
      * Get the password from the current data.
-     *
-     * @return string|null
      */
-    protected function password()
+    protected function getPassword(): ?string
     {
         return Arr::get($this->data, 'password');
     }
@@ -119,17 +105,15 @@ class PasswordHydrator extends Hydrator
      *
      * @return string|false
      */
-    protected function passwordColumn()
+    protected function getPasswordColumn(): bool|string
     {
         return Arr::get($this->config, 'password_column', 'password');
     }
 
     /**
      * Determine whether password sync is enabled.
-     *
-     * @return bool
      */
-    protected function isSyncingPasswords()
+    protected function isSyncingPasswords(): bool
     {
         return Arr::get($this->config, 'sync_passwords', false);
     }

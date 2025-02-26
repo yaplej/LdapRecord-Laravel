@@ -8,42 +8,28 @@ on:
 
 jobs:
     run-tests:
-        runs-on: ${{ matrix.os }}
+        runs-on: ubuntu-latest
         strategy:
             fail-fast: false
             matrix:
-                os: [ubuntu-latest]
-                php: [8.1, 8.0, 7.4, 7.3]
-                laravel: [9.*, 8.*, 7.*, 6.*, 5.8.*]
-                dependency-version: [prefer-stable]
                 include:
-                    - laravel: 9.*
-                      testbench: 7.*
-                    - laravel: 8.*
-                      testbench: 6.*
-                    - laravel: 8.*
-                      testbench: 6.*
-                    - laravel: 7.*
-                      testbench: 5.*
-                    - laravel: 6.*
-                      testbench: 4.*
-                    - laravel: 5.8.*
-                      testbench: 3.8.*
-                exclude:
-                    - laravel: 9.*
-                      php: 7.4
-                    - laravel: 9.*
-                      php: 7.3
-                    - laravel: 7.*
-                      php: 8.1
-                    - laravel: 6.*
-                      php: 8.1
-                    - laravel: 5.8.*
-                      php: 8.1
-                    - laravel: 5.8.*
-                      php: 8.0
+                    - php: 8.4
+                      laravel: 12.*
+                      testbench: 10.*
 
-        name: ${{ matrix.os }} - P${{ matrix.php }} - L${{ matrix.laravel }} - ${{ matrix.dependency-version }}
+                    - php: 8.4
+                      laravel: 11.*
+                      testbench: 9.*
+
+                    - php: 8.3
+                      laravel: 10.*
+                      testbench: 8.*
+
+                    - php: 8.2
+                      laravel: 9.*
+                      testbench: 7.*
+
+        name: P${{ matrix.php }} - L${{ matrix.laravel }}
 
         steps:
             - name: Checkout code
@@ -65,7 +51,7 @@ jobs:
             - name: Install dependencies
               run: |
                   composer require "laravel/framework:${{ matrix.laravel }}" "orchestra/testbench:${{ matrix.testbench }}" --no-interaction --no-update --dev
-                  composer update --${{ matrix.dependency-version }} --prefer-dist --no-interaction
+                  composer update --prefer-stable --prefer-dist --no-interaction
 
             - name: Execute tests
-              run: vendor/bin/phpunit
+              run: vendor/bin/phpunit --testdox

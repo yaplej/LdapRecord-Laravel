@@ -3,6 +3,7 @@
 namespace LdapRecord\Laravel\Tests;
 
 use Illuminate\Support\Facades\Hash;
+use Laravel\Sanctum\SanctumServiceProvider;
 use LdapRecord\Laravel\LdapAuthServiceProvider;
 use LdapRecord\Laravel\LdapServiceProvider;
 use LdapRecord\Laravel\Testing\DirectoryEmulator;
@@ -32,14 +33,10 @@ abstract class TestCase extends BaseTestCase
         return [
             LdapServiceProvider::class,
             LdapAuthServiceProvider::class,
+            SanctumServiceProvider::class,
         ];
     }
 
-    /**
-     * Define the environment setup.
-     *
-     * @param \Illuminate\Foundation\Application $app
-     */
     protected function getEnvironmentSetup($app)
     {
         $config = $app['config'];
@@ -52,8 +49,8 @@ abstract class TestCase extends BaseTestCase
         ]);
 
         // LDAP mock setup.
-        $config->set('ldap.logging', false);
         $config->set('ldap.default', 'default');
+        $config->set('ldap.logging.enabled', false);
         $config->set('ldap.connections.default', [
             'hosts' => ['localhost'],
             'username' => 'user',

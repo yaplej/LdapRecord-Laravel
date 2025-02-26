@@ -2,19 +2,22 @@
 
 namespace LdapRecord\Laravel\Auth;
 
+use Illuminate\Database\Eloquent\Model as Eloquent;
+use LdapRecord\Laravel\Events\Auth\RuleFailed;
+use LdapRecord\Laravel\Events\Auth\RulePassed;
+use LdapRecord\Models\Model as LdapRecord;
+
 class Validator
 {
     /**
      * The validation rules.
      *
-     * @var array
+     * @var \LdapRecord\Laravel\Auth\Rule[]
      */
-    protected $rules = [];
+    protected array $rules = [];
 
     /**
      * Constructor.
-     *
-     * @param iterable $rules
      */
     public function __construct(iterable $rules = [])
     {
@@ -24,39 +27,27 @@ class Validator
     }
 
     /**
-     * Checks if each rule passes validation.
-     *
-     * If all rules pass, authentication is granted.
-     *
-     * @return bool
+     * Determine if all rules pass validation.
      */
-    public function passes()
+    public function passes(LdapRecord $user, ?Eloquent $model = null): bool
     {
         foreach ($this->rules as $rule) {
-            if (! $rule->isValid()) {
+            if (! $rule->passes($user, $model)) {
+                event(new RuleFailed($rule, $user, $model));
+
                 return false;
             }
+
+            event(new RulePassed($rule, $user, $model));
         }
 
         return true;
     }
 
     /**
-     * Checks if a rule fails validation.
-     *
-     * @return bool
-     */
-    public function fails()
-    {
-        return ! $this->passes();
-    }
-
-    /**
      * Adds a rule to the validator.
-     *
-     * @param Rule $rule
      */
-    public function addRule(Rule $rule)
+    public function addRule(Rule $rule): void
     {
         $this->rules[] = $rule;
     }
@@ -64,9 +55,9 @@ class Validator
     /**
      * Get the rules on the validator.
      *
-     * @return array
+     * @return Rule[]
      */
-    public function getRules()
+    public function getRules(): array
     {
         return $this->rules;
     }

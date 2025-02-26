@@ -58,11 +58,11 @@ class LdapUserRepositoryTest extends TestCase
 
     public function test_find_by_credentials_returns_model()
     {
-        $user = new Entry();
+        $user = new Entry;
 
         $repository = m::mock(LdapUserRepository::class, function ($repository) use ($user) {
             $query = m::mock(Builder::class);
-            $query->shouldReceive('where')->withArgs(['username', 'foo'])->andReturnSelf();
+            $query->shouldReceive('where')->with('username', 'foo')->andReturnSelf();
             $query->shouldReceive('first')->once()->andReturn($user);
 
             $repository->makePartial()->shouldAllowMockingProtectedMethods();
@@ -74,11 +74,11 @@ class LdapUserRepositoryTest extends TestCase
 
     public function test_find_by_credentials_with_fallback_returns_model()
     {
-        $user = new Entry();
+        $user = new Entry;
 
         $repository = m::mock(LdapUserRepository::class, function ($repository) use ($user) {
             $query = m::mock(Builder::class);
-            $query->shouldReceive('where')->withArgs(['username', 'foo'])->andReturnSelf();
+            $query->shouldReceive('where')->with('username', 'foo')->andReturnSelf();
             $query->shouldReceive('first')->once()->andReturn($user);
 
             $repository->makePartial()->shouldAllowMockingProtectedMethods();
@@ -90,24 +90,26 @@ class LdapUserRepositoryTest extends TestCase
 
     public function test_find_by_attribute_and_value_returns_model()
     {
-        $repository = m::mock(LdapUserRepository::class, function ($repository) {
+        $model = new Entry;
+
+        $repository = m::mock(LdapUserRepository::class, function ($repository) use ($model) {
             $query = m::mock(Builder::class);
-            $query->shouldReceive('findBy')->once()->withArgs(['foo', 'bar'])->andReturn('baz');
+            $query->shouldReceive('findBy')->once()->with('foo', 'bar')->andReturn($model);
 
             $repository->makePartial()->shouldAllowMockingProtectedMethods();
             $repository->shouldReceive('newModelQuery')->once()->andReturn($query);
         });
 
-        $this->assertSame('baz', $repository->findBy('foo', 'bar'));
+        $this->assertSame($model, $repository->findBy('foo', 'bar'));
     }
 
     public function test_find_by_model_returns_model()
     {
-        $model = new \stdClass();
+        $model = new Entry;
 
         $repository = m::mock(LdapUserRepository::class, function ($repository) use ($model) {
             $query = m::mock(Builder::class);
-            $query->shouldReceive('findByGuid')->once()->withArgs(['guid'])->andReturn($model);
+            $query->shouldReceive('findByGuid')->once()->with('guid')->andReturn($model);
 
             $repository->makePartial()->shouldAllowMockingProtectedMethods();
             $repository->shouldReceive('newModelQuery')->once()->andReturn($query);
@@ -119,16 +121,31 @@ class LdapUserRepositoryTest extends TestCase
         $this->assertSame($model, $repository->findByModel($authenticatable));
     }
 
-    public function test_find_by_guid_returns_model()
+    public function test_find_by_model_returns_null_when_no_guid_is_present()
     {
         $repository = m::mock(LdapUserRepository::class, function ($repository) {
+            $repository->makePartial()->shouldAllowMockingProtectedMethods();
+            $repository->shouldNotReceive('newModelQuery');
+        });
+
+        $authenticatable = m::mock(LdapAuthenticatable::class);
+        $authenticatable->shouldReceive('getLdapGuid')->once()->andReturnNull();
+
+        $this->assertNull($repository->findByModel($authenticatable));
+    }
+
+    public function test_find_by_guid_returns_model()
+    {
+        $model = new Entry;
+
+        $repository = m::mock(LdapUserRepository::class, function ($repository) use ($model) {
             $query = m::mock(Builder::class);
-            $query->shouldReceive('findByGuid')->once()->withArgs(['guid'])->andReturn('foo');
+            $query->shouldReceive('findByGuid')->once()->with('guid')->andReturn($model);
 
             $repository->makePartial()->shouldAllowMockingProtectedMethods();
             $repository->shouldReceive('newModelQuery')->once()->andReturn($query);
         });
 
-        $this->assertSame('foo', $repository->findByGuid('guid'));
+        $this->assertSame($model, $repository->findByGuid('guid'));
     }
 }
